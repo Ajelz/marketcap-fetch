@@ -6,8 +6,7 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 const allowedOrigins = [
-    'https://boysclubhq.com',
-    'https://www.boysclubhq.com'
+    'https://boysclubhq.com'
 ];
 
 app.use(cors({
