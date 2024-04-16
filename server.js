@@ -2,59 +2,143 @@ const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
 const path = require('path');
+const mongoose = require('mongoose');
 const app = express();
 const port = process.env.PORT || 3001;
 
-const allowedOrigins = [
-    'https://boysclubhq.com'
-];
+// MongoDB Connection using the properly formatted and URL-encoded URI
+const username = 'ajelazzabi';
+const password = encodeURIComponent('bY2aVmpV6nGwth8X');
+const cluster = 'boysclubhq-marketcaps.rwblvmk.mongodb.net';
+const dbName = 'MarketCapsDB';
+const mongoURI = `mongodb+srv://${username}:${password}@${cluster}/${dbName}?retryWrites=true&w=majority&appName=BoysClubHQ-Marketcaps`;
 
+mongoose.connect(mongoURI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true
+}).then(() => {
+    console.log('MongoDB connected successfully');
+    printLatestMarketCap();  // Print the latest market cap data after successful connection
+    setInterval(fetchAndSaveMarketCaps, 30 * 60 * 1000); // Fetch and save market caps every 30 minutes
+}).catch(err => console.log('Failed to connect to MongoDB:', err));
+
+// Market Cap Schema and Model
+const MarketCapSchema = new mongoose.Schema({
+    timestamp: Date,
+    coins: [{
+        id: String,
+        marketCap: Number
+    }]
+});
+
+const MarketCap = mongoose.model('MarketCap', MarketCapSchema);
+
+// Define allowed origins
+const allowedOrigins = ['https://boysclubhq.com'];
+
+// CORS configuration
 app.use(cors({
-    origin: function (origin, callback) {
-        // Log the origin for debugging
-        console.log("Origin of request: " + origin);
-        if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+    origin: (origin, callback) => {
+        if (!origin || allowedOrigins.includes(origin)) {
             callback(null, true);
         } else {
-            callback(new Error('Not allowed by CORS'), false);
+            callback(new Error('The CORS policy for this site does not allow access from the specified Origin.'));
         }
     },
-    credentials: true, // Enables credentials such as cookies, authorization headers, etc.
-    optionsSuccessStatus: 200 // For legacy browser support
+    credentials: true,
+    optionsSuccessStatus: 200
 }));
 
-// Additional explicit headers set for all responses
+// Logging middleware
 app.use((req, res, next) => {
-    res.header("Access-Control-Allow-Origin", allowedOrigins.join(", "));
-    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
-    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    console.log(`Received ${req.method} request for ${req.url} from ${req.headers.origin}`);
     next();
 });
 
-// API route for CoinGecko market cap
-app.get('/api/coingecko/marketcap', async (req, res) => {
-    const coinIds = req.query.ids;
-    if (!coinIds) {
-        return res.status(400).send("No coin IDs provided");
-    }
-
+// Function to fetch and save market caps
+async function fetchAndSaveMarketCaps() {
     const url = 'https://api.coingecko.com/api/v3/coins/markets';
+    const coinIds = ['pepe', 'based-brett', 'andyerc', 'landwolf-on-avax', 'bird-dog-on-sol']; // example IDs
     try {
         const response = await axios.get(url, {
             params: {
                 vs_currency: 'usd',
-                ids: coinIds
+                ids: coinIds.join(',')
             }
         });
-        res.json(response.data);
+
+        const priceMultipliers = {
+            'andyerc': 97500000,
+            'landwolf-on-avax': 549999000000,
+            'bird-dog-on-sol': 999890000
+        };
+
+        // Store in the database
+        const newRecord = new MarketCap({
+            timestamp: new Date(),
+            coins: response.data.map(coin => ({
+                id: coin.id,
+                marketCap: priceMultipliers[coin.id] ? coin.current_price * priceMultipliers[coin.id] : coin.market_cap
+            }))
+        });
+        await newRecord.save();
+
+        console.log('Market cap data saved successfully');
     } catch (error) {
         console.error('Error fetching market caps from CoinGecko:', error);
-        res.status(500).send('Failed to fetch market caps from CoinGecko');
+    }
+}
+
+// API endpoint for market cap
+app.get('/api/coingecko/marketcap', async (req, res) => {
+    await fetchAndSaveMarketCaps();
+    res.status(201).send('Market cap data fetched and saved successfully');
+});
+
+// New API endpoint to fetch the latest market cap data
+app.get('/api/marketcap/latest', async (req, res) => {
+    try {
+        const latestMarketCap = await MarketCap.findOne().sort({ timestamp: -1 });
+        if (!latestMarketCap) {
+            return res.status(404).send('No market cap data found');
+        }
+        const orderedMarketCaps = [
+            latestMarketCap.coins.find(coin => coin.id === 'pepe')?.marketCap,
+            latestMarketCap.coins.find(coin => coin.id === 'based-brett')?.marketCap,
+            latestMarketCap.coins.find(coin => coin.id === 'andyerc')?.marketCap,
+            latestMarketCap.coins.find(coin => coin.id === 'landwolf-on-avax')?.marketCap,
+            latestMarketCap.coins.find(coin => coin.id === 'bird-dog-on-sol')?.marketCap
+        ].filter(mc => mc !== undefined);
+        res.json(orderedMarketCaps);
+    } catch (error) {
+        console.error('Failed to fetch latest market cap:', error);
+        res.status(500).send('Error retrieving market cap data');
     }
 });
 
-app.use(express.static(path.join(__dirname, '..', 'build')));
+// Function to print the latest market cap data
+async function printLatestMarketCap() {
+    try {
+        const latestMarketCap = await MarketCap.findOne().sort({ timestamp: -1 });
+        if (latestMarketCap) {
+            const orderedMarketCaps = [
+                latestMarketCap.coins.find(coin => coin.id === 'pepe')?.marketCap,
+                latestMarketCap.coins.find(coin => coin.id === 'based-brett')?.marketCap,
+                latestMarketCap.coins.find(coin => coin.id === 'andyerc')?.marketCap,
+                latestMarketCap.coins.find(coin => coin.id === 'landwolf-on-avax')?.marketCap,
+                latestMarketCap.coins.find(coin => coin.id === 'bird-dog-on-sol')?.marketCap
+            ].filter(mc => mc !== undefined);
+            console.log('Latest Market Caps:', orderedMarketCaps.join(', '));
+        } else {
+            console.log('No market cap data found');
+        }
+    } catch (error) {
+        console.error('Failed to print latest market cap:', error);
+    }
+}
 
+// Static files and React routing
+app.use(express.static(path.join(__dirname, '..', 'build')));
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, '..', 'build', 'index.html'));
 });
